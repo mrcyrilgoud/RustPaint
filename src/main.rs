@@ -247,6 +247,6 @@ fn main() -> eframe::Result<()> {
                 .with_title("MasterPaint"),
             ..Default::default()
         },
-        Box::new(|_cc| Box::new(MasterPaint::default())),
+        Box::new(|_cc| Ok(Box::new(MasterPaint::default()))),
     )
 }
