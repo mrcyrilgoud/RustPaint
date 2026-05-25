@@ -59,7 +59,7 @@ impl MasterPaint {
 
     /// Paint a filled circle of `brush_size` radius centred at (cx, cy).
     fn stamp_circle(&mut self, cx: i32, cy: i32, color: Color32) {
-        let r = self.brush_size as i32;
+        let r = self.brush_size.round() as i32;
         for dy in -r..=r {
             for dx in -r..=r {
                 if dx * dx + dy * dy <= r * r {
@@ -211,12 +211,14 @@ impl eframe::App for MasterPaint {
                 );
             }
 
-            // Crosshair cursor over the canvas.
-            ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
-
             // Read mouse state and paint.
             let (hover, down) =
                 ctx.input(|i| (i.pointer.hover_pos(), i.pointer.primary_down()));
+
+            // Crosshair only while over the canvas, not over toolbar widgets.
+            if hover.map(|p| rect.contains(p)).unwrap_or(false) {
+                ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+            }
 
             if down {
                 if let Some(pos) = hover {
@@ -230,6 +232,10 @@ impl eframe::App for MasterPaint {
                     } else {
                         self.last_pos = None;
                     }
+                } else {
+                    // Cursor left the window while button was held; clear so
+                    // re-entry doesn't streak from the old position.
+                    self.last_pos = None;
                 }
             } else {
                 self.last_pos = None;
