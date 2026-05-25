@@ -33,7 +33,7 @@ Requires a Rust toolchain (1.70+). Dependencies download automatically via Cargo
 
 ## Tech
 
-- [`eframe 0.28`](https://crates.io/crates/eframe) — native window and event loop
-- [`egui 0.28`](https://crates.io/crates/egui) — immediate-mode GUI + color picker
+- [`eframe 0.31`](https://crates.io/crates/eframe) — native window and event loop
+- [`egui 0.31`](https://crates.io/crates/egui) — immediate-mode GUI + color picker
 - Pixel buffer uploaded as a `ColorImage` texture each frame when modified
 - Strokes interpolated with Bresenham's line algorithm so fast mouse movement leaves no gaps
