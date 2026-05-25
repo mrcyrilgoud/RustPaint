@@ -1,6 +1,8 @@
-# MasterPaint
+# RustPaint
 
 A simple painting app built with Rust and [egui](https://github.com/emilk/egui) / [eframe](https://github.com/emilk/egui/tree/master/crates/eframe).
+
+![demo](demo.gif)
 
 ## Features
 

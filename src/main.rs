@@ -246,11 +246,11 @@ impl eframe::App for MasterPaint {
 
 fn main() -> eframe::Result<()> {
     eframe::run_native(
-        "MasterPaint",
+        "RustPaint",
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([1300.0, 900.0])
-                .with_title("MasterPaint"),
+                .with_title("RustPaint"),
             ..Default::default()
         },
         Box::new(|_cc| Ok(Box::new(MasterPaint::default()))),
