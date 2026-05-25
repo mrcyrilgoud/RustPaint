@@ -12,6 +12,7 @@ const CANVAS_H: usize = 800;
 enum Tool {
     Brush,
     Eraser,
+    FloodFill,
 }
 
 struct MasterPaint {
@@ -46,7 +47,7 @@ impl Default for MasterPaint {
 impl MasterPaint {
     fn active_color(&self) -> Color32 {
         match self.tool {
-            Tool::Brush => self.color,
+            Tool::Brush | Tool::FloodFill => self.color,
             Tool::Eraser => Color32::WHITE,
         }
     }
@@ -114,6 +115,43 @@ impl MasterPaint {
         }
         self.dirty = true;
     }
+
+    /// BFS flood fill: replace all pixels connected to the clicked point that
+    /// share its colour with the current brush colour.
+    fn flood_fill(&mut self, pos: Pos2, rect: egui::Rect) {
+        let (sx, sy) = self.to_canvas(pos, rect);
+        if sx < 0 || sx >= CANVAS_W as i32 || sy < 0 || sy >= CANVAS_H as i32 {
+            return;
+        }
+        let (tx, ty) = (sx as usize, sy as usize);
+        let target = self.pixels[ty * CANVAS_W + tx];
+        let fill = self.color;
+        if target == fill {
+            return;
+        }
+
+        let mut queue = std::collections::VecDeque::new();
+        // Mark the seed immediately to prevent duplicate enqueuing.
+        self.pixels[ty * CANVAS_W + tx] = fill;
+        queue.push_back((tx, ty));
+
+        while let Some((x, y)) = queue.pop_front() {
+            for (nx, ny) in [
+                (x.wrapping_sub(1), y),
+                (x + 1, y),
+                (x, y.wrapping_sub(1)),
+                (x, y + 1),
+            ] {
+                if nx < CANVAS_W && ny < CANVAS_H
+                    && self.pixels[ny * CANVAS_W + nx] == target
+                {
+                    self.pixels[ny * CANVAS_W + nx] = fill;
+                    queue.push_back((nx, ny));
+                }
+            }
+        }
+        self.dirty = true;
+    }
 }
 
 impl eframe::App for MasterPaint {
@@ -125,6 +163,7 @@ impl eframe::App for MasterPaint {
                 ui.label("Tool:");
                 ui.selectable_value(&mut self.tool, Tool::Brush, "Brush");
                 ui.selectable_value(&mut self.tool, Tool::Eraser, "Eraser");
+                ui.selectable_value(&mut self.tool, Tool::FloodFill, "Fill");
                 ui.separator();
 
                 // Brush size slider
@@ -132,8 +171,8 @@ impl eframe::App for MasterPaint {
                 ui.add(egui::Slider::new(&mut self.brush_size, 1.0_f32..=50.0).step_by(1.0));
                 ui.separator();
 
-                // Color controls (only meaningful for Brush)
-                if self.tool == Tool::Brush {
+                // Color controls (not shown for Eraser)
+                if self.tool != Tool::Eraser {
                     ui.label("Color:");
                     // Full RGB/HSV color picker popup
                     ui.color_edit_button_srgba(&mut self.color);
@@ -212,33 +251,50 @@ impl eframe::App for MasterPaint {
             }
 
             // Read mouse state and paint.
-            let (hover, down) =
-                ctx.input(|i| (i.pointer.hover_pos(), i.pointer.primary_down()));
+            let (hover, down, pressed) = ctx.input(|i| (
+                i.pointer.hover_pos(),
+                i.pointer.primary_down(),
+                i.pointer.primary_pressed(),
+            ));
 
             // Crosshair only while over the canvas, not over toolbar widgets.
             if hover.map(|p| rect.contains(p)).unwrap_or(false) {
                 ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
             }
 
-            if down {
-                if let Some(pos) = hover {
-                    if rect.contains(pos) {
-                        if let Some(last) = self.last_pos {
-                            self.paint_stroke(last, pos, rect);
-                        } else {
-                            self.paint_dot(pos, rect);
+            match self.tool {
+                Tool::FloodFill => {
+                    // Single click fires the fill; no stroke tracking needed.
+                    if pressed {
+                        if let Some(pos) = hover {
+                            if rect.contains(pos) {
+                                self.flood_fill(pos, rect);
+                            }
                         }
-                        self.last_pos = Some(pos);
+                    }
+                }
+                _ => {
+                    if down {
+                        if let Some(pos) = hover {
+                            if rect.contains(pos) {
+                                if let Some(last) = self.last_pos {
+                                    self.paint_stroke(last, pos, rect);
+                                } else {
+                                    self.paint_dot(pos, rect);
+                                }
+                                self.last_pos = Some(pos);
+                            } else {
+                                self.last_pos = None;
+                            }
+                        } else {
+                            // Cursor left the window while button was held; clear so
+                            // re-entry doesn't streak from the old position.
+                            self.last_pos = None;
+                        }
                     } else {
                         self.last_pos = None;
                     }
-                } else {
-                    // Cursor left the window while button was held; clear so
-                    // re-entry doesn't streak from the old position.
-                    self.last_pos = None;
                 }
-            } else {
-                self.last_pos = None;
             }
         });
     }
