@@ -112,6 +112,7 @@ enum Tool {
     Brush,
     Eraser,
     FloodFill,
+    Eyedropper,
     Line,
     Shape,
     Crop,
@@ -131,6 +132,8 @@ struct MasterPaint {
     tool: Tool,
     shape_kind: ShapeKind,
     brush_size: f32,
+    /// Independent stroke thickness for Line and Shape tools.
+    line_thickness: f32,
     color: Color32,
     /// Last cursor position while dragging — used by Brush/Eraser to
     /// interpolate strokes between frames.
@@ -146,6 +149,10 @@ struct MasterPaint {
     stroke_pre: Option<Vec<Color32>>,
     /// Bbox accumulated as the in-progress stroke paints.
     stroke_bbox: Option<Bbox>,
+    /// File path shown in the save/load text box.
+    file_path: String,
+    /// One-frame status message from the last save/load attempt.
+    file_status: Option<String>,
 }
 
 impl Default for MasterPaint {
@@ -156,6 +163,7 @@ impl Default for MasterPaint {
             tool: Tool::Brush,
             shape_kind: ShapeKind::Rect,
             brush_size: 5.0,
+            line_thickness: 2.0,
             color: Color32::BLACK,
             last_pos: None,
             drag_start: None,
@@ -163,6 +171,8 @@ impl Default for MasterPaint {
             history: VecDeque::new(),
             stroke_pre: None,
             stroke_bbox: None,
+            file_path: "canvas.png".to_string(),
+            file_status: None,
         }
     }
 }
@@ -202,8 +212,6 @@ impl MasterPaint {
     }
 
     /// Begin a brush/eraser stroke: snapshot the canvas, reset the bbox.
-    /// If a prior stroke was still pending (pointer left and re-entered while
-    /// held), commit it first to preserve the existing per-segment behaviour.
     fn begin_stroke(&mut self) {
         self.commit_stroke();
         self.stroke_pre = Some(self.pixels.clone());
@@ -247,10 +255,8 @@ impl MasterPaint {
 
     // ── Drawing primitives ───────────────────────────────────────────────────
 
-    /// Paint a filled circle of `brush_size` radius centred at (cx, cy).
-    /// Scanline form: one slice-fill per row, no per-pixel branching.
-    fn stamp_circle(&mut self, cx: i32, cy: i32, color: Color32) {
-        let r = self.brush_size.round() as i32;
+    /// Paint a filled circle of radius `r` centred at (cx, cy).
+    fn stamp_circle(&mut self, cx: i32, cy: i32, r: i32, color: Color32) {
         if r < 0 {
             return;
         }
@@ -283,15 +289,15 @@ impl MasterPaint {
         )
     }
 
-    /// Bresenham line stamping a circle at every step.
-    fn stroke_canvas(&mut self, mut x0: i32, mut y0: i32, x1: i32, y1: i32, c: Color32) {
+    /// Bresenham line stamping a circle of radius `r` at every step.
+    fn stroke_canvas(&mut self, mut x0: i32, mut y0: i32, x1: i32, y1: i32, r: i32, c: Color32) {
         let dx = (x1 - x0).abs();
         let dy = (y1 - y0).abs();
         let sx = if x0 < x1 { 1i32 } else { -1 };
         let sy = if y0 < y1 { 1i32 } else { -1 };
         let mut err = dx - dy;
         loop {
-            self.stamp_circle(x0, y0, c);
+            self.stamp_circle(x0, y0, r, c);
             if x0 == x1 && y0 == y1 {
                 break;
             }
@@ -309,21 +315,21 @@ impl MasterPaint {
 
     fn paint_dot(&mut self, pos: Pos2, rect: egui::Rect) {
         let (cx, cy) = self.to_canvas(pos, rect);
+        let r = self.brush_size.round() as i32;
         let c = self.active_color();
-        self.stamp_circle(cx, cy, c);
+        self.stamp_circle(cx, cy, r, c);
     }
 
     fn paint_stroke(&mut self, a: Pos2, b: Pos2, rect: egui::Rect) {
         let (x0, y0) = self.to_canvas(a, rect);
         let (x1, y1) = self.to_canvas(b, rect);
+        let r = self.brush_size.round() as i32;
         let c = self.active_color();
-        self.stroke_canvas(x0, y0, x1, y1, c);
+        self.stroke_canvas(x0, y0, x1, y1, r, c);
     }
 
     // ── Flood fill ───────────────────────────────────────────────────────────
 
-    /// BFS flood fill. Returns the bbox of changed pixels, or None if nothing
-    /// was filled (seed out of bounds or seed already matches the fill colour).
     fn flood_fill(&mut self, pos: Pos2, rect: egui::Rect) -> Option<Bbox> {
         let (sx, sy) = self.to_canvas(pos, rect);
         if sx < 0 || sx >= CANVAS_W as i32 || sy < 0 || sy >= CANVAS_H as i32 {
@@ -362,59 +368,106 @@ impl MasterPaint {
         Some(bbox)
     }
 
+    // ── Eyedropper ───────────────────────────────────────────────────────────
+
+    fn pick_color(&mut self, pos: Pos2, rect: egui::Rect) {
+        let (x, y) = self.to_canvas(pos, rect);
+        if x >= 0 && x < CANVAS_W as i32 && y >= 0 && y < CANVAS_H as i32 {
+            self.color = self.pixels[y as usize * CANVAS_W + x as usize];
+        }
+    }
+
+    // ── Save / Load PNG ──────────────────────────────────────────────────────
+
+    fn save_png(&self, path: &str) -> Result<(), String> {
+        let mut buf = Vec::with_capacity(CANVAS_W * CANVAS_H * 4);
+        for p in &self.pixels {
+            buf.push(p.r());
+            buf.push(p.g());
+            buf.push(p.b());
+            buf.push(p.a());
+        }
+        image::save_buffer(path, &buf, CANVAS_W as u32, CANVAS_H as u32, image::ColorType::Rgba8)
+            .map_err(|e| e.to_string())
+    }
+
+    fn load_png(&mut self, path: &str) -> Result<(), String> {
+        let img = image::open(path).map_err(|e| e.to_string())?;
+        let img = img.to_rgba8();
+        let (iw, ih) = img.dimensions();
+        let raw = img.into_raw();
+        self.push_full_patch();
+        let mut new_pixels = vec![Color32::WHITE; CANVAS_W * CANVAS_H];
+        for dy in 0..CANVAS_H {
+            for dx in 0..CANVAS_W {
+                let sx = (dx * iw as usize / CANVAS_W).min(iw as usize - 1);
+                let sy = (dy * ih as usize / CANVAS_H).min(ih as usize - 1);
+                let i = (sy * iw as usize + sx) * 4;
+                new_pixels[dy * CANVAS_W + dx] =
+                    Color32::from_rgba_unmultiplied(raw[i], raw[i+1], raw[i+2], raw[i+3]);
+            }
+        }
+        self.pixels = new_pixels;
+        self.dirty = true;
+        Ok(())
+    }
+
     // ── Commit handlers for Line / Shape / Crop drag tools ───────────────────
 
     fn line_or_shape_bbox(&self, a: Pos2, b: Pos2, rect: egui::Rect) -> Bbox {
         let p0 = self.to_canvas(a, rect);
         let p1 = self.to_canvas(b, rect);
-        let r = self.brush_size.round() as i32;
+        let r = self.line_thickness.round() as i32;
         Bbox::from_two(p0, p1).expand(r)
     }
 
     fn commit_line(&mut self, a: Pos2, b: Pos2, rect: egui::Rect) {
         let (x0, y0) = self.to_canvas(a, rect);
         let (x1, y1) = self.to_canvas(b, rect);
-        self.stroke_canvas(x0, y0, x1, y1, self.color);
+        let r = self.line_thickness.round() as i32;
+        self.stroke_canvas(x0, y0, x1, y1, r, self.color);
     }
 
     fn commit_shape(&mut self, a: Pos2, b: Pos2, rect: egui::Rect) {
         let (x0, y0) = self.to_canvas(a, rect);
         let (x1, y1) = self.to_canvas(b, rect);
+        let r = self.line_thickness.round() as i32;
         let c = self.color;
 
         match self.shape_kind {
             ShapeKind::Rect => {
                 let (lx, rx) = (x0.min(x1), x0.max(x1));
                 let (ty, by) = (y0.min(y1), y0.max(y1));
-                self.stroke_canvas(lx, ty, rx, ty, c);
-                self.stroke_canvas(rx, ty, rx, by, c);
-                self.stroke_canvas(rx, by, lx, by, c);
-                self.stroke_canvas(lx, by, lx, ty, c);
+                self.stroke_canvas(lx, ty, rx, ty, r, c);
+                self.stroke_canvas(rx, ty, rx, by, r, c);
+                self.stroke_canvas(rx, by, lx, by, r, c);
+                self.stroke_canvas(lx, by, lx, ty, r, c);
             }
             ShapeKind::Ellipse => {
                 let cx = (x0 + x1) as f32 / 2.0;
                 let cy = (y0 + y1) as f32 / 2.0;
-                let rx = ((x1 - x0).abs() / 2).max(1) as f32;
-                let ry = ((y1 - y0).abs() / 2).max(1) as f32;
+                let erx = ((x1 - x0).abs() / 2).max(1) as f32;
+                let ery = ((y1 - y0).abs() / 2).max(1) as f32;
                 let n =
-                    ((std::f32::consts::TAU * rx.max(ry)) as usize).max(60);
-                let mut prev = (cx + rx, cy);
-                for (nx, ny) in ellipse_perimeter(cx, cy, rx, ry, n).skip(1) {
+                    ((std::f32::consts::TAU * erx.max(ery)) as usize).max(60);
+                let mut prev = (cx + erx, cy);
+                for (nx, ny) in ellipse_perimeter(cx, cy, erx, ery, n).skip(1) {
                     self.stroke_canvas(
                         prev.0.round() as i32,
                         prev.1.round() as i32,
                         nx.round() as i32,
                         ny.round() as i32,
+                        r,
                         c,
                     );
                     prev = (nx, ny);
                 }
-                // Close the loop back to the starting sample.
                 self.stroke_canvas(
                     prev.0.round() as i32,
                     prev.1.round() as i32,
-                    (cx + rx).round() as i32,
+                    (cx + erx).round() as i32,
                     cy.round() as i32,
+                    r,
                     c,
                 );
             }
@@ -435,8 +488,6 @@ impl MasterPaint {
             return;
         }
 
-        // Swap out the source so we can write the new image into a fresh
-        // buffer without aliasing self.pixels.
         let src = std::mem::take(&mut self.pixels);
         let mut dst = vec![Color32::WHITE; CANVAS_W * CANVAS_H];
         for dy in 0..CANVAS_H {
@@ -452,9 +503,6 @@ impl MasterPaint {
         self.dirty = true;
     }
 
-    /// Dispatch a drag-tool release: snapshot the affected region into history
-    /// and commit the operation. Called only when `self.tool` is Line, Shape,
-    /// or Crop (gated by the caller's outer match).
     fn commit_drag_tool(&mut self, start: Pos2, end: Pos2, rect: egui::Rect) {
         self.commit_stroke();
         match self.tool {
@@ -486,6 +534,7 @@ impl eframe::App for MasterPaint {
                 ui.selectable_value(&mut self.tool, Tool::Brush, "Brush");
                 ui.selectable_value(&mut self.tool, Tool::Eraser, "Eraser");
                 ui.selectable_value(&mut self.tool, Tool::FloodFill, "Fill");
+                ui.selectable_value(&mut self.tool, Tool::Eyedropper, "Eyedropper");
                 ui.selectable_value(&mut self.tool, Tool::Line, "Line");
                 ui.selectable_value(&mut self.tool, Tool::Shape, "Shape");
                 ui.selectable_value(&mut self.tool, Tool::Crop, "Crop");
@@ -497,13 +546,19 @@ impl eframe::App for MasterPaint {
                     ui.separator();
                 }
 
-                if self.tool != Tool::FloodFill && self.tool != Tool::Crop {
+                if matches!(self.tool, Tool::Brush | Tool::Eraser) {
                     ui.label("Size:");
                     ui.add(egui::Slider::new(&mut self.brush_size, 1.0_f32..=50.0).step_by(1.0));
                     ui.separator();
                 }
 
-                if self.tool != Tool::Eraser && self.tool != Tool::Crop {
+                if matches!(self.tool, Tool::Line | Tool::Shape) {
+                    ui.label("Thickness:");
+                    ui.add(egui::Slider::new(&mut self.line_thickness, 1.0_f32..=30.0).step_by(1.0));
+                    ui.separator();
+                }
+
+                if !matches!(self.tool, Tool::Eraser | Tool::Crop | Tool::Eyedropper) {
                     ui.label("Color:");
                     ui.color_edit_button_srgba(&mut self.color);
                     ui.separator();
@@ -551,6 +606,26 @@ impl eframe::App for MasterPaint {
                 if ui.add_enabled(can_undo, egui::Button::new("Undo")).clicked() {
                     self.undo();
                 }
+
+                ui.separator();
+                ui.add(egui::TextEdit::singleline(&mut self.file_path).desired_width(160.0));
+                if ui.button("Save PNG").clicked() {
+                    let path = self.file_path.clone();
+                    match self.save_png(&path) {
+                        Ok(()) => self.file_status = Some(format!("Saved {path}")),
+                        Err(e) => self.file_status = Some(format!("Save failed: {e}")),
+                    }
+                }
+                if ui.button("Load PNG").clicked() {
+                    let path = self.file_path.clone();
+                    match self.load_png(&path) {
+                        Ok(()) => self.file_status = Some(format!("Loaded {path}")),
+                        Err(e) => self.file_status = Some(format!("Load failed: {e}")),
+                    }
+                }
+                if let Some(ref msg) = self.file_status {
+                    ui.label(msg);
+                }
             });
         });
 
@@ -585,7 +660,7 @@ impl eframe::App for MasterPaint {
             }
 
             // ── Live drag preview ─────────────────────────────────────────────
-            let screen_brush = self.brush_size * rect.width() / CANVAS_W as f32;
+            let screen_line = self.line_thickness * rect.width() / CANVAS_W as f32;
 
             if let Some(start) = self.drag_start {
                 let end = ui.ctx().input(|i| i.pointer.hover_pos()).unwrap_or(start);
@@ -595,12 +670,12 @@ impl eframe::App for MasterPaint {
                     Tool::Line => {
                         painter.line_segment(
                             [start, end],
-                            egui::Stroke::new(screen_brush.max(1.0), self.color),
+                            egui::Stroke::new(screen_line.max(1.0), self.color),
                         );
                     }
                     Tool::Shape => {
                         let pr = egui::Rect::from_two_pos(start, end);
-                        let stroke = egui::Stroke::new(screen_brush.max(1.0), self.color);
+                        let stroke = egui::Stroke::new(screen_line.max(1.0), self.color);
                         match self.shape_kind {
                             ShapeKind::Rect => {
                                 painter.rect_stroke(pr, 0.0, stroke, egui::StrokeKind::Middle);
@@ -668,7 +743,12 @@ impl eframe::App for MasterPaint {
             }
 
             if hover.map(|p| rect.contains(p)).unwrap_or(false) {
-                ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+                let icon = if self.tool == Tool::Eyedropper {
+                    egui::CursorIcon::PointingHand
+                } else {
+                    egui::CursorIcon::Crosshair
+                };
+                ctx.set_cursor_icon(icon);
             }
 
             match self.tool {
@@ -683,6 +763,16 @@ impl eframe::App for MasterPaint {
                                         self.push_patch(p);
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+
+                Tool::Eyedropper => {
+                    if pressed {
+                        if let Some(pos) = hover {
+                            if rect.contains(pos) {
+                                self.pick_color(pos, rect);
                             }
                         }
                     }
@@ -730,11 +820,11 @@ impl eframe::App for MasterPaint {
 
 fn main() -> eframe::Result<()> {
     eframe::run_native(
-        "RustPaint",
+        "MasterPaint",
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([1300.0, 900.0])
-                .with_title("RustPaint"),
+                .with_title("MasterPaint"),
             ..Default::default()
         },
         Box::new(|_cc| Ok(Box::new(MasterPaint::default()))),
