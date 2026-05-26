@@ -40,6 +40,8 @@ struct MasterPaint {
     drag_start: Option<Pos2>,
     /// Set whenever `pixels` changes; triggers a texture re-upload.
     dirty: bool,
+    /// Undo history: snapshots of `pixels` before each destructive operation.
+    history: Vec<Vec<Color32>>,
 }
 
 impl Default for MasterPaint {
@@ -54,6 +56,7 @@ impl Default for MasterPaint {
             last_pos: None,
             drag_start: None,
             dirty: true,
+            history: Vec::new(),
         }
     }
 }
@@ -63,6 +66,22 @@ impl MasterPaint {
         match self.tool {
             Tool::Eraser => Color32::WHITE,
             _ => self.color,
+        }
+    }
+
+    /// Save a snapshot of the current canvas before a destructive operation.
+    fn push_history(&mut self) {
+        if self.history.len() >= 50 {
+            self.history.remove(0);
+        }
+        self.history.push(self.pixels.clone());
+    }
+
+    /// Restore the most recent snapshot, if any.
+    fn undo(&mut self) {
+        if let Some(snapshot) = self.history.pop() {
+            self.pixels = snapshot;
+            self.dirty = true;
         }
     }
 
@@ -316,8 +335,14 @@ impl eframe::App for MasterPaint {
                 }
 
                 if ui.button("Clear Canvas").clicked() {
+                    self.push_history();
                     self.pixels.fill(Color32::WHITE);
                     self.dirty = true;
+                }
+
+                let can_undo = !self.history.is_empty();
+                if ui.add_enabled(can_undo, egui::Button::new("Undo")).clicked() {
+                    self.undo();
                 }
             });
         });
@@ -434,11 +459,16 @@ impl eframe::App for MasterPaint {
             }
 
             // ── Input ─────────────────────────────────────────────────────────
-            let (hover, down, pressed) = ctx.input(|i| (
+            let (hover, down, pressed, undo_pressed) = ctx.input(|i| (
                 i.pointer.hover_pos(),
                 i.pointer.primary_down(),
                 i.pointer.primary_pressed(),
+                i.key_pressed(egui::Key::Z) && i.modifiers.command,
             ));
+
+            if undo_pressed {
+                self.undo();
+            }
 
             // Crosshair only while over the canvas, not over toolbar widgets.
             if hover.map(|p| rect.contains(p)).unwrap_or(false) {
@@ -451,6 +481,7 @@ impl eframe::App for MasterPaint {
                     if pressed {
                         if let Some(pos) = hover {
                             if rect.contains(pos) {
+                                self.push_history();
                                 self.flood_fill(pos, rect);
                             }
                         }
@@ -468,6 +499,7 @@ impl eframe::App for MasterPaint {
                         }
                     } else if let Some(start) = self.drag_start.take() {
                         let end = hover.unwrap_or(start);
+                        self.push_history();
                         match self.tool {
                             Tool::Line  => self.commit_line(start, end, rect),
                             Tool::Shape => self.commit_shape(start, end, rect),
@@ -485,6 +517,7 @@ impl eframe::App for MasterPaint {
                                 if let Some(last) = self.last_pos {
                                     self.paint_stroke(last, pos, rect);
                                 } else {
+                                    self.push_history();
                                     self.paint_dot(pos, rect);
                                 }
                                 self.last_pos = Some(pos);
