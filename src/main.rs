@@ -9,6 +9,52 @@ use std::time::Instant;
 const HISTORY_CAP: usize = 50;
 const SELECTION_COLOR: Color32 = Color32::from_rgb(30, 120, 255);
 
+/// Primary palette row 1: neutrals + classic hues (18 swatches).
+#[rustfmt::skip]
+const PALETTE_ROW1: [Color32; 18] = [
+    Color32::from_rgb(  0,   0,   0), // Black
+    Color32::from_rgb( 64,  64,  64), // Dark Gray
+    Color32::from_rgb(128, 128, 128), // Gray
+    Color32::from_rgb(192, 192, 192), // Silver
+    Color32::from_rgb(255, 255, 255), // White
+    Color32::from_rgb(255,   0,   0), // Red
+    Color32::from_rgb(128,   0,   0), // Dark Red
+    Color32::from_rgb(255, 128,   0), // Orange
+    Color32::from_rgb(255,  69,   0), // Orange Red
+    Color32::from_rgb(255, 215,   0), // Gold
+    Color32::from_rgb(  0, 200,   0), // Lime Green
+    Color32::from_rgb(  0, 128,   0), // Green
+    Color32::from_rgb(  0,  80,   0), // Dark Green
+    Color32::from_rgb(  0, 200, 200), // Cyan
+    Color32::from_rgb(135, 206, 235), // Sky Blue
+    Color32::from_rgb(  0,   0, 255), // Blue
+    Color32::from_rgb(  0,   0, 128), // Navy
+    Color32::from_rgb(128,   0, 128), // Purple
+];
+
+/// Primary palette row 2: pastels, earth tones, skin tones, neons (18 swatches).
+#[rustfmt::skip]
+const PALETTE_ROW2: [Color32; 18] = [
+    Color32::from_rgb(255, 182, 193), // Light Pink
+    Color32::from_rgb(250, 128, 114), // Salmon
+    Color32::from_rgb(255, 218, 185), // Peach
+    Color32::from_rgb(255, 250, 205), // Lemon Chiffon
+    Color32::from_rgb(152, 251, 152), // Pale Green
+    Color32::from_rgb(224, 255, 255), // Light Cyan
+    Color32::from_rgb(173, 216, 230), // Light Blue
+    Color32::from_rgb(221, 160, 221), // Plum
+    Color32::from_rgb(255, 221, 193), // Skin Light
+    Color32::from_rgb(232, 184, 154), // Skin Medium-Light
+    Color32::from_rgb(198, 134,  66), // Skin Medium
+    Color32::from_rgb(141,  85,  36), // Skin Medium-Dark
+    Color32::from_rgb(139,  69,  19), // Saddle Brown
+    Color32::from_rgb(210, 180, 140), // Tan
+    Color32::from_rgb( 57, 255,  20), // Neon Green
+    Color32::from_rgb(255, 255,   0), // Neon Yellow
+    Color32::from_rgb(255,   0, 255), // Magenta
+    Color32::from_rgb(255,  20, 147), // Deep Pink
+];
+
 /// Fixed canvas resolution in pixels.
 const CANVAS_W: usize = 1200;
 const CANVAS_H: usize = 800;
@@ -311,6 +357,12 @@ struct RustPaint {
     text_buffer: String,
     /// Integer scale multiplier: glyph renders at (8*scale) × (8*scale) px.
     text_scale: u32,
+
+    // ── Palette history ──────────────────────────────────────────────────────
+    /// The 10 most-recently-used draw colors (newest first).
+    recent_colors: VecDeque<Color32>,
+    /// 8 user-saveable color slots. None = empty. Right-click a swatch to fill.
+    saved_slots: [Option<Color32>; 8],
 }
 
 impl Default for RustPaint {
@@ -344,6 +396,8 @@ impl Default for RustPaint {
             text_origin: None,
             text_buffer: String::new(),
             text_scale: 2,
+            recent_colors: VecDeque::new(),
+            saved_slots: [None; 8],
         }
     }
 }
@@ -353,6 +407,16 @@ impl RustPaint {
         match self.tool {
             Tool::Eraser => Color32::WHITE,
             _ => self.color,
+        }
+    }
+
+    /// Record the current foreground color as recently used (deduplicates, max 10).
+    fn push_recent(&mut self) {
+        let c = self.color;
+        self.recent_colors.retain(|&x| x != c);
+        self.recent_colors.push_front(c);
+        while self.recent_colors.len() > 10 {
+            self.recent_colors.pop_back();
         }
     }
 
@@ -629,6 +693,7 @@ impl RustPaint {
         for (i, ch) in buf.chars().enumerate() {
             self.stamp_char(ch, ox + i as i32 * glyph_w, oy, scale, color);
         }
+        self.push_recent();
     }
 
     // ── Save / Load PNG ──────────────────────────────────────────────────────
@@ -805,11 +870,13 @@ impl RustPaint {
                 let bbox = self.line_or_shape_bbox(start, end, rect);
                 self.push_bbox_patch(bbox);
                 self.commit_line(start, end, rect);
+                self.push_recent();
             }
             Tool::Shape => {
                 let bbox = self.line_or_shape_bbox(start, end, rect);
                 self.push_bbox_patch(bbox);
                 self.commit_shape(start, end, rect);
+                self.push_recent();
             }
             Tool::Crop => {
                 self.push_full_patch();
@@ -880,39 +947,91 @@ impl RustPaint {
         }
 
         if !matches!(self.tool, Tool::Eraser | Tool::Crop | Tool::Eyedropper) {
-            ui.label("Color:");
-            ui.color_edit_button_srgba(&mut self.color);
-            ui.separator();
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 3.0;
 
-            for swatch in [
-                Color32::BLACK,
-                Color32::DARK_GRAY,
-                Color32::GRAY,
-                Color32::LIGHT_GRAY,
-                Color32::WHITE,
-                Color32::RED,
-                Color32::from_rgb(0, 200, 0),
-                Color32::BLUE,
-                Color32::YELLOW,
-                Color32::from_rgb(255, 165, 0),
-                Color32::from_rgb(160, 32, 240),
-                Color32::from_rgb(0, 200, 200),
-                Color32::from_rgb(255, 20, 147),
-                Color32::from_rgb(139, 69, 19),
-            ] {
-                let selected = self.color == swatch;
-                let stroke = if selected {
-                    egui::Stroke::new(2.0, SELECTION_COLOR)
-                } else {
-                    egui::Stroke::new(1.0, Color32::DARK_GRAY)
-                };
-                if ui
-                    .add(egui::Button::new("   ").fill(swatch).stroke(stroke))
-                    .clicked()
-                {
-                    self.color = swatch;
+                // Custom color picker row
+                ui.horizontal(|ui| {
+                    ui.label("Color:");
+                    ui.color_edit_button_srgba(&mut self.color);
+                    ui.label(
+                        RichText::new("Custom…")
+                            .color(Color32::from_gray(140))
+                            .size(11.0),
+                    );
+                });
+
+                // Main palette — row 1
+                ui.label(
+                    RichText::new("Palette").color(Color32::from_gray(140)).size(10.0),
+                );
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for &sw in PALETTE_ROW1.iter() {
+                        let hex = format!("#{:02X}{:02X}{:02X}", sw.r(), sw.g(), sw.b());
+                        if swatch_ui(ui, sw, self.color == sw).on_hover_text(hex).clicked() {
+                            self.color = sw;
+                        }
+                    }
+                });
+
+                // Main palette — row 2
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for &sw in PALETTE_ROW2.iter() {
+                        let hex = format!("#{:02X}{:02X}{:02X}", sw.r(), sw.g(), sw.b());
+                        if swatch_ui(ui, sw, self.color == sw).on_hover_text(hex).clicked() {
+                            self.color = sw;
+                        }
+                    }
+                });
+
+                // Recent colors
+                if !self.recent_colors.is_empty() {
+                    ui.label(
+                        RichText::new("Recent").color(Color32::from_gray(140)).size(10.0),
+                    );
+                    let recents: Vec<Color32> = self.recent_colors.iter().copied().collect();
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        for c in recents {
+                            let hex = format!("#{:02X}{:02X}{:02X}", c.r(), c.g(), c.b());
+                            if swatch_ui(ui, c, self.color == c).on_hover_text(hex).clicked() {
+                                self.color = c;
+                            }
+                        }
+                    });
                 }
-            }
+
+                // Saved slots
+                ui.label(
+                    RichText::new("Saved  (right-click to save current color)")
+                        .color(Color32::from_gray(140))
+                        .size(10.0),
+                );
+                let slots = self.saved_slots;
+                let cur = self.color;
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for i in 0..8usize {
+                        let resp = if let Some(c) = slots[i] {
+                            let hex = format!("#{:02X}{:02X}{:02X}", c.r(), c.g(), c.b());
+                            swatch_ui(ui, c, cur == c).on_hover_text(hex)
+                        } else {
+                            empty_slot_ui(ui)
+                                .on_hover_text("Empty — right-click to save current color")
+                        };
+                        if resp.clicked() {
+                            if let Some(c) = slots[i] {
+                                self.color = c;
+                            }
+                        }
+                        if resp.secondary_clicked() {
+                            self.saved_slots[i] = Some(cur);
+                        }
+                    }
+                });
+            });
             ui.separator();
         }
 
@@ -1181,6 +1300,7 @@ impl RustPaint {
                         if let Some(p) = make_patch(&pre, bbox) {
                             self.push_patch(p);
                         }
+                        self.push_recent();
                     }
                 }
             }
@@ -1235,6 +1355,7 @@ impl RustPaint {
                 } else {
                     self.last_pos = None;
                     self.commit_stroke();
+                    self.push_recent();
                 }
             }
 
@@ -1319,6 +1440,9 @@ impl RustPaint {
                 } else {
                     self.last_pos = None;
                     self.commit_stroke();
+                    if self.tool == Tool::Brush {
+                        self.push_recent();
+                    }
                 }
             }
         }
@@ -1403,6 +1527,45 @@ impl eframe::App for RustPaint {
             self.handle_tool_input(rect, ctx, hover, down, pressed);
         });
     }
+}
+
+/// Draw a 20×20 filled color swatch with a selection-aware border.
+fn swatch_ui(ui: &mut egui::Ui, color: Color32, selected: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        painter.rect_filled(rect, 2.0, color);
+        let (w, c) = if selected {
+            (2.0, SELECTION_COLOR)
+        } else {
+            (1.0, Color32::from_gray(80))
+        };
+        painter.rect_stroke(rect, 2.0, egui::Stroke::new(w, c), egui::StrokeKind::Middle);
+    }
+    resp
+}
+
+/// Draw a 20×20 empty saved-slot placeholder with a "+" indicator.
+fn empty_slot_ui(ui: &mut egui::Ui) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        painter.rect_filled(rect, 2.0, Color32::from_gray(55));
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "+",
+            egui::FontId::proportional(11.0),
+            Color32::from_gray(160),
+        );
+        painter.rect_stroke(
+            rect,
+            2.0,
+            egui::Stroke::new(1.0, Color32::from_gray(80)),
+            egui::StrokeKind::Middle,
+        );
+    }
+    resp
 }
 
 fn short_name(path: &str) -> &str {
