@@ -55,6 +55,27 @@ const PALETTE_ROW2: [Color32; 18] = [
     Color32::from_rgb(255,  20, 147), // Deep Pink
 ];
 
+/// Hex tooltip strings for the two palette rows, computed once on first access.
+fn palette_row1_hex() -> &'static [String; 18] {
+    static HEX: std::sync::OnceLock<[String; 18]> = std::sync::OnceLock::new();
+    HEX.get_or_init(|| {
+        std::array::from_fn(|i| {
+            let c = PALETTE_ROW1[i];
+            format!("#{:02X}{:02X}{:02X}", c.r(), c.g(), c.b())
+        })
+    })
+}
+
+fn palette_row2_hex() -> &'static [String; 18] {
+    static HEX: std::sync::OnceLock<[String; 18]> = std::sync::OnceLock::new();
+    HEX.get_or_init(|| {
+        std::array::from_fn(|i| {
+            let c = PALETTE_ROW2[i];
+            format!("#{:02X}{:02X}{:02X}", c.r(), c.g(), c.b())
+        })
+    })
+}
+
 /// Fixed canvas resolution in pixels.
 const CANVAS_W: usize = 1200;
 const CANVAS_H: usize = 800;
@@ -510,9 +531,11 @@ impl RustPaint {
         self.commit_stroke();
         self.stroke_originals.clear();
         self.stroke_bbox = None;
-        self.stroke_epoch = self.stroke_epoch.wrapping_add(1).max(1);
-        if self.stroke_epoch == 1 {
+        if self.stroke_epoch == u32::MAX {
             self.stroke_marks.fill(0);
+            self.stroke_epoch = 1;
+        } else {
+            self.stroke_epoch += 1;
         }
         self.stroke_active = true;
     }
@@ -552,6 +575,19 @@ impl RustPaint {
             h: h as u32,
             pixels: Vec::with_capacity(w * h),
         };
+        // Phase 1: snapshot the current (post-stroke) pixels in the bbox.
+        // Phase 2: overwrite each touched pixel's slot with its pre-stroke value.
+        // Invariant: capture_stroke_original only records pixels whose canvas
+        // index falls inside stroke_bbox, so every entry in stroke_originals
+        // is guaranteed to lie within [lx..=rx, ty..=by].
+        debug_assert!(
+            self.stroke_originals.iter().all(|(idx, _)| {
+                let x = idx % CANVAS_W;
+                let y = idx / CANVAS_W;
+                x >= lx && x <= rx && y >= ty && y <= by
+            }),
+            "stroke_originals contains a pixel outside stroke_bbox — invariant violated"
+        );
         for y in ty..=by {
             let row = y * CANVAS_W + lx;
             patch.pixels.extend_from_slice(&self.pixels[row..row + w]);
@@ -1782,26 +1818,6 @@ impl eframe::App for RustPaint {
             self.render_eraser_cursor(ui, rect, hover);
         });
     }
-}
-
-fn palette_row1_hex() -> &'static [String; 18] {
-    static HEX: std::sync::OnceLock<[String; 18]> = std::sync::OnceLock::new();
-    HEX.get_or_init(|| {
-        std::array::from_fn(|i| {
-            let c = PALETTE_ROW1[i];
-            format!("#{:02X}{:02X}{:02X}", c.r(), c.g(), c.b())
-        })
-    })
-}
-
-fn palette_row2_hex() -> &'static [String; 18] {
-    static HEX: std::sync::OnceLock<[String; 18]> = std::sync::OnceLock::new();
-    HEX.get_or_init(|| {
-        std::array::from_fn(|i| {
-            let c = PALETTE_ROW2[i];
-            format!("#{:02X}{:02X}{:02X}", c.r(), c.g(), c.b())
-        })
-    })
 }
 
 /// Draw a 20×20 filled color swatch with a selection-aware border.
