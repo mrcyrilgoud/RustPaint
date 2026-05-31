@@ -55,24 +55,6 @@ const PALETTE_ROW2: [Color32; 18] = [
     Color32::from_rgb(255,  20, 147), // Deep Pink
 ];
 
-/// Hex tooltip strings for the 36 static palette swatches, computed once.
-static PALETTE_HEX: std::sync::OnceLock<([String; 18], [String; 18])> =
-    std::sync::OnceLock::new();
-
-fn palette_hex() -> &'static ([String; 18], [String; 18]) {
-    PALETTE_HEX.get_or_init(|| {
-        let row1 = std::array::from_fn(|i| {
-            let sw = PALETTE_ROW1[i];
-            format!("#{:02X}{:02X}{:02X}", sw.r(), sw.g(), sw.b())
-        });
-        let row2 = std::array::from_fn(|i| {
-            let sw = PALETTE_ROW2[i];
-            format!("#{:02X}{:02X}{:02X}", sw.r(), sw.g(), sw.b())
-        });
-        (row1, row2)
-    })
-}
-
 /// Fixed canvas resolution in pixels.
 const CANVAS_W: usize = 1200;
 const CANVAS_H: usize = 800;
