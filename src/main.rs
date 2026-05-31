@@ -394,6 +394,15 @@ struct RustPaint {
     recent_colors: VecDeque<Color32>,
     /// 8 user-saveable color slots. None = empty. Right-click a swatch to fill.
     saved_slots: [Option<Color32>; 8],
+    /// True while a blocking rfd file dialog is running on the main thread.
+    /// On macOS, `[NSSavePanel runModal]` / `[NSOpenPanel runModal]` spin a
+    /// nested AppKit event loop. That loop can re-enter eframe and trigger a
+    /// second `update()` call before the first one returns, which causes egui
+    /// to see two `begin_frame` calls without an `end_frame` in between and
+    /// immediately panics. Setting this flag before every `rfd::FileDialog`
+    /// call and checking it at the top of `update()` makes re-entrant frames
+    /// return early, keeping egui's frame counter consistent.
+    dialog_open: bool,
 }
 
 impl Default for RustPaint {
@@ -433,6 +442,7 @@ impl Default for RustPaint {
             text_scale: 2,
             recent_colors: VecDeque::new(),
             saved_slots: [None; 8],
+            dialog_open: false,
         }
     }
 }
@@ -1299,10 +1309,14 @@ impl RustPaint {
             .on_hover_text("Open an image file")
             .clicked()
         {
-            if let Some(path) = rfd::FileDialog::new()
+            // Set the guard BEFORE blocking so any re-entrant update() call
+            // triggered by the modal event loop returns early (see dialog_open).
+            self.dialog_open = true;
+            let picked = rfd::FileDialog::new()
                 .add_filter("Images", &["png", "jpg", "jpeg", "bmp"])
-                .pick_file()
-            {
+                .pick_file();
+            self.dialog_open = false;
+            if let Some(path) = picked {
                 let s = path.to_string_lossy().to_string();
                 let short = path
                     .file_name()
@@ -1346,11 +1360,14 @@ impl RustPaint {
             } else {
                 "untitled.png".to_string()
             };
-            if let Some(path) = rfd::FileDialog::new()
+            // Set the guard BEFORE blocking (see dialog_open comment above).
+            self.dialog_open = true;
+            let saved = rfd::FileDialog::new()
                 .add_filter("PNG Image", &["png"])
                 .set_file_name(&default)
-                .save_file()
-            {
+                .save_file();
+            self.dialog_open = false;
+            if let Some(path) = saved {
                 let mut s = path.to_string_lossy().to_string();
                 if !s.ends_with(".png") {
                     s.push_str(".png");
@@ -1716,6 +1733,18 @@ impl RustPaint {
 
 impl eframe::App for RustPaint {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Guard against re-entrant calls.
+        // On macOS, rfd's blocking dialogs run [NSSavePanel/NSOpenPanel runModal],
+        // which spins a nested AppKit event loop. Drag-tracking and other events
+        // dispatched by that loop can cause eframe to invoke update() again while
+        // the outer call is still blocked inside rfd. A second begin_frame() call
+        // before end_frame() panics inside egui; with panic="abort" in the release
+        // profile that becomes an immediate SIGABRT. Returning early here keeps
+        // egui's frame counter consistent without touching any app state.
+        if self.dialog_open {
+            return;
+        }
+
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| self.render_toolbar(ui));
         });
