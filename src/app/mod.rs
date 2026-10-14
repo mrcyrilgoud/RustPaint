@@ -7,8 +7,7 @@ use egui::{Color32, ColorImage, Pos2, TextureHandle, TextureOptions};
 use crate::constants::{CANVAS_H, CANVAS_W, HISTORY_CAP};
 use crate::font::FONT8X8;
 use crate::geom::{
-    copy_region, ellipse_perimeter, make_patch, patch_bbox, shape_geometry, Bbox,
-    ShapeGeometry,
+    copy_region, ellipse_perimeter, make_patch, patch_bbox, shape_geometry, Bbox, ShapeGeometry,
 };
 use crate::rng::next_rand;
 use crate::types::{Patch, ShapeKind, Tool};
@@ -682,13 +681,7 @@ impl RustPaint {
     fn commit_shape(&mut self, a: Pos2, b: Pos2, rect: egui::Rect) {
         let (x0, y0) = self.to_canvas(a, rect);
         let (x1, y1) = self.to_canvas(b, rect);
-        let geom = shape_geometry(
-            self.shape_kind,
-            x0 as f32,
-            y0 as f32,
-            x1 as f32,
-            y1 as f32,
-        );
+        let geom = shape_geometry(self.shape_kind, x0 as f32, y0 as f32, x1 as f32, y1 as f32);
         let r = self.line_thickness.round() as i32;
         self.commit_geometry(&geom, r, self.color);
     }
@@ -1195,13 +1188,7 @@ impl eframe::App for RustPaint {
                 rect,
                 &painter,
             );
-            render_eraser_cursor(
-                self.tool,
-                self.brush_size,
-                rect,
-                hover,
-                &painter,
-            );
+            render_eraser_cursor(self.tool, self.brush_size, rect, hover, &painter);
         });
     }
 }

@@ -129,18 +129,8 @@ pub fn regular_polygon(cx: f32, cy: f32, r: f32, n: usize, start_angle: f32) -> 
 }
 
 pub enum ShapeGeometry {
-    Rect {
-        lx: f32,
-        ty: f32,
-        rx: f32,
-        by: f32,
-    },
-    Ellipse {
-        cx: f32,
-        cy: f32,
-        rx: f32,
-        ry: f32,
-    },
+    Rect { lx: f32, ty: f32, rx: f32, by: f32 },
+    Ellipse { cx: f32, cy: f32, rx: f32, ry: f32 },
     Polygon(Vec<(f32, f32)>),
 }
 

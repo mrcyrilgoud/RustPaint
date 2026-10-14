@@ -50,11 +50,7 @@ pub fn empty_slot_ui(ui: &mut egui::Ui) -> egui::Response {
     resp
 }
 
-pub fn render_palette_row(
-    ui: &mut egui::Ui,
-    row_idx: usize,
-    color: &mut Color32,
-) {
+pub fn render_palette_row(ui: &mut egui::Ui, row_idx: usize, color: &mut Color32) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for (&sw, hex) in PALETTE_ROWS[row_idx]
@@ -140,7 +136,12 @@ pub fn render_tool_sliders(
     }
 }
 
-pub fn render_color_palette(ui: &mut egui::Ui, color: &mut Color32, recent_colors: &[Color32], saved_slots: &mut [Option<Color32>]) {
+pub fn render_color_palette(
+    ui: &mut egui::Ui,
+    color: &mut Color32,
+    recent_colors: &[Color32],
+    saved_slots: &mut [Option<Color32>],
+) {
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 3.0;
 
@@ -172,10 +173,7 @@ pub fn render_color_palette(ui: &mut egui::Ui, color: &mut Color32, recent_color
                 ui.spacing_mut().item_spacing.x = 2.0;
                 for &c in recent_colors {
                     let hex = color_hex(c);
-                    if swatch_ui(ui, c, *color == c)
-                        .on_hover_text(hex)
-                        .clicked()
-                    {
+                    if swatch_ui(ui, c, *color == c).on_hover_text(hex).clicked() {
                         *color = c;
                     }
                 }
@@ -194,8 +192,7 @@ pub fn render_color_palette(ui: &mut egui::Ui, color: &mut Color32, recent_color
                 let resp = if let Some(c) = *slot {
                     swatch_ui(ui, c, cur == c).on_hover_text(color_hex(c))
                 } else {
-                    empty_slot_ui(ui)
-                        .on_hover_text("Empty — right-click to save current color")
+                    empty_slot_ui(ui).on_hover_text("Empty — right-click to save current color")
                 };
                 if resp.clicked() {
                     if let Some(c) = *slot {
@@ -210,11 +207,7 @@ pub fn render_color_palette(ui: &mut egui::Ui, color: &mut Color32, recent_color
     });
 }
 
-pub fn preview_shape_geometry(
-    painter: &egui::Painter,
-    geom: &ShapeGeometry,
-    stroke: Stroke,
-) {
+pub fn preview_shape_geometry(painter: &egui::Painter, geom: &ShapeGeometry, stroke: Stroke) {
     match geom {
         ShapeGeometry::Rect { lx, ty, rx, by } => {
             let pr = egui::Rect::from_min_max(egui::pos2(*lx, *ty), egui::pos2(*rx, *by));
@@ -250,20 +243,11 @@ pub fn render_drag_preview(
 
     match tool {
         Tool::Line => {
-            painter.line_segment(
-                [start, end],
-                Stroke::new(screen_line.max(1.0), color),
-            );
+            painter.line_segment([start, end], Stroke::new(screen_line.max(1.0), color));
         }
         Tool::Shape => {
             let stroke = Stroke::new(screen_line.max(1.0), color);
-            let geom = shape_geometry(
-                shape_kind,
-                start.x,
-                start.y,
-                end.x,
-                end.y,
-            );
+            let geom = shape_geometry(shape_kind, start.x, start.y, end.x, end.y);
             preview_shape_geometry(painter, &geom, stroke);
         }
         Tool::Crop => {
@@ -321,8 +305,10 @@ pub fn render_text_cursor(
     let Some((ox, oy)) = text_origin else {
         return;
     };
-    let sx = canvas_rect.min.x + ox as f32 / crate::constants::CANVAS_W as f32 * canvas_rect.width();
-    let sy = canvas_rect.min.y + oy as f32 / crate::constants::CANVAS_H as f32 * canvas_rect.height();
+    let sx =
+        canvas_rect.min.x + ox as f32 / crate::constants::CANVAS_W as f32 * canvas_rect.width();
+    let sy =
+        canvas_rect.min.y + oy as f32 / crate::constants::CANVAS_H as f32 * canvas_rect.height();
     let preview = format!("{text_buffer}_");
     let px_per_canvas = canvas_rect.width() / crate::constants::CANVAS_W as f32;
     let font_size = (8.0 * text_scale as f32 * px_per_canvas).max(8.0);
